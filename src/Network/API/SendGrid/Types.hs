@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -7,9 +8,11 @@
 module Network.API.SendGrid.Types where
 
 import Control.Lens (makeLenses, makePrisms, Lens', lens)
-import Data.Aeson (pairs, (.=), fromEncoding, Encoding, FromJSON(..), (.:), withObject, ToJSON(..), object)
+import Data.Aeson hiding (Result, Success)
 import Data.ByteString as BS (ByteString)
+#if MIN_VERSION_aeson(0,10,0)
 import Data.ByteString.Builder as B (toLazyByteString)
+#endif
 import Data.ByteString.Lazy as BSL (toStrict, ByteString)
 import Data.CaseInsensitive (foldedCase)
 import qualified Data.DList as D
@@ -118,12 +121,12 @@ namedEmails =
       setter _ (x : xs) = Just (Left $ x :| xs)
 
 mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail
-mkSendEmail to subject body from'
+mkSendEmail to subject body from
   = SendEmail
   { _sendTo       = to
   , _sendSubject  = subject
   , _sendBody     = body
-  , _sendFrom     = from'
+  , _sendFrom     = from
   , _sendCc       = Nothing
   , _sendBcc      = Nothing
   , _sendFromName = Nothing
@@ -133,6 +136,9 @@ mkSendEmail to subject body from'
   , _sendContent  = []
   , _sendHeaders  = []
   }
+
+mkSingleRecipEmail :: EmailAddress -> Text -> These Html Text -> EmailAddress -> SendEmail
+mkSingleRecipEmail to = mkSendEmail (Right $ to :| [])
 
 emailsToParts :: Text -> Text -> Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> [Part]
 emailsToParts emailKey nameKey (Left namedEmails') =
@@ -181,18 +187,30 @@ sendEmailToParts SendEmail{..} =
       headerPart =
         case _sendHeaders of
           [] -> []
-          headers -> [partBS "headers" . encodingToByteString $ encodeHeaders headers]
+          headers -> [partBS "headers" . headersToBS $ headers]
       bodyParts =
         case _sendBody of
           This html -> [partBS "html" . BSL.toStrict $ renderHtml html]
           That text -> [partText "text" text]
           These html text -> [partBS "html" . BSL.toStrict $ renderHtml html, partText "text" text]
 
+#if MIN_VERSION_aeson(0,10,0)
+
 encodingToByteString :: Encoding -> BS.ByteString
 encodingToByteString = BSL.toStrict . B.toLazyByteString . fromEncoding
 
 encodeHeaders :: [Header] -> Encoding
 encodeHeaders = pairs . foldMap (\(key, value) -> decodeUtf8 (foldedCase key) .= decodeUtf8 value)
+
+headersToBS :: [Header] -> BS.ByteString
+headersToBS = encodingToByteString . encodeHeaders
+
+#else
+
+headersToBS :: [Header] -> BS.ByteString
+headersToBS = BSL.toStrict . encode . object . map (\(key, value) -> decodeUtf8 (foldedCase key) .= decodeUtf8 value)
+
+#endif
 
 sendGridDateFormat :: String
 sendGridDateFormat = "%a, %d %b %Y %H:%M:%S %z"
