@@ -1,7 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Network.API.SendGrid where
+module Network.API.SendGrid
+  ( module Network.API.SendGrid
+  , module Network.API.SendGrid.Types
+  ) where
 
 import Control.Lens ((^?), (.~), (&), (^.))
 import Control.Monad.Reader.Class (MonadReader, ask)
