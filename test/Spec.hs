@@ -25,6 +25,7 @@ exampleEmail =
     "Coming via sendgrid"
     (That "Text body")
     (unsafeEmailAddress "eric" "frontrowed.com"))
-    { sendFiles = Just [File "fileName.txt" "Attachment"]
-    , sendDate = Just (UTCTime (fromGregorian 2000 1 1) 0)
+    { _sendFiles = Just [File "fileName.txt" "Attachment"]
+    , _sendDate = Just (UTCTime (fromGregorian 2000 1 1) 0)
+    , _sendCc = Just (Left [NamedEmail (unsafeEmailAddress "chris" "frontrowed.com") "Chris"])
     }

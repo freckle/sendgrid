@@ -2,9 +2,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Network.API.SendGrid.Types where
 
+import Control.Lens.TH (makeLenses, makePrisms)
 import Data.Aeson (pairs, (.=), fromEncoding, Encoding, FromJSON(..), (.:), withObject, ToJSON(..), object)
 import Data.ByteString as BS (ByteString)
 import Data.ByteString.Builder as B (toLazyByteString)
@@ -28,13 +30,15 @@ import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 import Text.Email.Validate as E (EmailAddress, toByteString)
 
 newtype ApiKey
-  = ApiKey { unApiKey :: Text } deriving (Eq, Show, Ord)
+  = ApiKey Text deriving (Eq, Show, Ord)
+makePrisms ''ApiKey
 
 data Result
   = Success
   | SendGridErrors [Text]
   | OtherError (Response BSL.ByteString)
   deriving (Eq, Show)
+makePrisms ''Result
 instance FromJSON Result where
   parseJSON =
     withObject "expected SendGrid response to be an object" $ \o -> do
@@ -57,63 +61,66 @@ instance ToJSON Result where
 
 data NamedEmail
   = NamedEmail
-  { neEmail :: EmailAddress
-  , neName  :: Text
+  { _neEmail :: EmailAddress
+  , _neName  :: Text
   } deriving (Eq, Show)
+makeLenses ''NamedEmail
 
 data File
  = File
-  { fileName    :: Text
-  , fileContent :: BS.ByteString
+  { _fileName    :: Text
+  , _fileContent :: BS.ByteString
   } deriving (Eq, Show)
+makeLenses ''File
 
 data Content
   = Content
-  { contentFile :: File
-  , contentId   :: Text
+  { _contentFile :: File
+  , _contentId   :: Text
   } deriving (Eq, Show)
+makeLenses ''Content
 
 data SendEmail
  = SendEmail
-  { sendTo       :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
-  , sendSubject  :: Text
-  , sendBody     :: These Html Text
-  , sendFrom     :: EmailAddress
-  , sendCc       :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , sendBcc      :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , sendFromName :: Maybe Text
-  , sendReplyTo  :: Maybe EmailAddress
-  , sendDate     :: Maybe UTCTime
-  -- Don't duplicate files from `sendContent` here
-  , sendFiles    :: Maybe (NonEmpty File)
-  , sendContent  :: Maybe (NonEmpty Content)
-  , sendHeaders  :: Maybe (NonEmpty Header)
+  { _sendTo       :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
+  , _sendSubject  :: Text
+  , _sendBody     :: These Html Text
+  , _sendFrom     :: EmailAddress
+  , _sendCc       :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _sendBcc      :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _sendFromName :: Maybe Text
+  , _sendReplyTo  :: Maybe EmailAddress
+  , _sendDate     :: Maybe UTCTime
+  , _sendFiles    :: Maybe (NonEmpty File) -- ^ Don't duplicate files from `_sendContent` here
+  , _sendContent  :: Maybe (NonEmpty Content)
+  , _sendHeaders  :: Maybe (NonEmpty Header)
   }
+makeLenses ''SendEmail
 -- Can't derive (`Eq` or `Show`) because of `Html`
 
 mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail
 mkSendEmail to subject body from
-                 = SendEmail
-  { sendTo       = to
-  , sendSubject  = subject
-  , sendBody     = body
-  , sendFrom     = from
-  , sendCc       = Nothing
-  , sendBcc      = Nothing
-  , sendFromName = Nothing
-  , sendReplyTo  = Nothing
-  , sendDate     = Nothing
-  , sendFiles    = Nothing
-  , sendContent  = Nothing
-  , sendHeaders  = Nothing
+  = SendEmail
+  { _sendTo       = to
+  , _sendSubject  = subject
+  , _sendBody     = body
+  , _sendFrom     = from
+  , _sendCc       = Nothing
+  , _sendBcc      = Nothing
+  , _sendFromName = Nothing
+  , _sendReplyTo  = Nothing
+  , _sendDate     = Nothing
+  , _sendFiles    = Nothing
+  , _sendContent  = Nothing
+  , _sendHeaders  = Nothing
   }
 
 emailsToParts :: Text -> Text -> Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> [Part]
 emailsToParts emailKey nameKey (Left namedEmails) =
   flip foldMap namedEmails
      (\NamedEmail{..} ->
-       [ partBS emailKey $ E.toByteString neEmail
-       , partText nameKey neName
+       [ partBS emailKey $ E.toByteString _neEmail
+       , partText nameKey _neName
        ])
 emailsToParts emailKey _ (Right emails) =
   partBS emailKey . E.toByteString <$> NE.toList emails
@@ -138,23 +145,23 @@ sendEmailToParts SendEmail{..} =
   , contentParts
   ]
     where
-      fileToPart File{..} = partFileRequestBody ("files[" <> fileName  <> "]") (T.unpack fileName) (RequestBodyBS fileContent)
-      contentParts = maybe [] (foldMap contentToParts . NE.toList) sendContent
+      fileToPart File{..} = partFileRequestBody ("files[" <> _fileName  <> "]") (T.unpack _fileName) (RequestBodyBS _fileContent)
+      contentParts = maybe [] (foldMap contentToParts . NE.toList) _sendContent
         where
-          contentToParts (Content file@File{..} contentId) =
-            [fileToPart file, partText ("content[" <> fileName <> "]") contentId]
-      fileParts = maybe [] (map fileToPart . NE.toList) sendFiles
-      toParts = emailsToParts "to[]" "toname[]" sendTo
-      fromPart = partBS "from" $ E.toByteString sendFrom
-      ccParts = maybe [] (emailsToParts "cc[]" "ccname[]") sendCc
-      bccParts = maybe [] (emailsToParts "bcc[]" "bccname[]") sendBcc
-      fromNamePart = maybeToList $ partText "fromname" <$> sendFromName
-      replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> sendReplyTo
-      datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> sendDate
-      subjectPart = partText "subject" sendSubject
-      headerPart = maybeToList $ partBS "headers" . encodingToByteString . encodeHeaders . NE.toList <$> sendHeaders
+          contentToParts (Content file@File{..} cId) =
+            [fileToPart file, partText ("content[" <> _fileName <> "]") cId]
+      fileParts = maybe [] (map fileToPart . NE.toList) _sendFiles
+      toParts = emailsToParts "to[]" "toname[]" _sendTo
+      fromPart = partBS "from" $ E.toByteString _sendFrom
+      ccParts = maybe [] (emailsToParts "cc[]" "ccname[]") _sendCc
+      bccParts = maybe [] (emailsToParts "bcc[]" "bccname[]") _sendBcc
+      fromNamePart = maybeToList $ partText "fromname" <$> _sendFromName
+      replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> _sendReplyTo
+      datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> _sendDate
+      subjectPart = partText "subject" _sendSubject
+      headerPart = maybeToList $ partBS "headers" . encodingToByteString . encodeHeaders . NE.toList <$> _sendHeaders
       bodyParts =
-        case sendBody of
+        case _sendBody of
           This html -> [partBS "html" . BSL.toStrict $ renderHtml html]
           That text -> [partText "text" text]
           These html text -> [partBS "html" . BSL.toStrict $ renderHtml html, partText "text" text]

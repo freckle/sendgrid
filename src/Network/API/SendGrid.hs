@@ -3,7 +3,7 @@
 
 module Network.API.SendGrid where
 
-import Control.Lens ((^?), (.~), (&))
+import Control.Lens ((^?), (.~), (&), (^.))
 import Control.Monad.Reader.Class (MonadReader, ask)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson.Lens (_JSON)
@@ -42,6 +42,6 @@ sendEmailPlain key session e = sendEmail e (key, session)
 authOptions :: ApiKey -> Options
 authOptions key =
   defaults
-    & header "Authorization" .~ ["Bearer " <> encodeUtf8 (unApiKey key)]
+    & header "Authorization" .~ ["Bearer " <> encodeUtf8 (key ^. _ApiKey)]
     -- We'd rather deal with status code problems as values
     & checkStatus .~ Just (\_ _ _ -> Nothing)
