@@ -6,9 +6,9 @@
 module Network.API.SendGrid.Types where
 
 import Data.Aeson (pairs, (.=), fromEncoding, Encoding, FromJSON(..), (.:), withObject, ToJSON(..), object)
-import Data.ByteString (ByteString)
+import Data.ByteString as BS (ByteString)
 import Data.ByteString.Builder as B (toLazyByteString)
-import Data.ByteString.Lazy as BSL (toStrict)
+import Data.ByteString.Lazy as BSL (toStrict, ByteString)
 import Data.CaseInsensitive (foldedCase)
 import Data.DList as D (toList, fromList)
 import Data.List.NonEmpty as NE (NonEmpty, toList)
@@ -18,7 +18,7 @@ import Data.Text as T (Text, pack, unpack)
 import Data.Text.Encoding (decodeUtf8)
 import Data.These (These(..))
 import Data.Time (UTCTime(..), defaultTimeLocale, formatTime)
-import Network.HTTP.Client (RequestBody(RequestBodyBS))
+import Network.HTTP.Client (RequestBody(RequestBodyBS), Response)
 import Network.HTTP.Client.MultipartFormData (partFileRequestBody)
 import Network.HTTP.Types.Header (Header)
 import Network.Wreq (partBS, partText, Part)
@@ -32,7 +32,8 @@ newtype ApiKey
 
 data Result
   = Success
-  | Errors [Text]
+  | SendGridErrors [Text]
+  | OtherError (Response BSL.ByteString)
   deriving (Eq, Show)
 instance FromJSON Result where
   parseJSON =
@@ -40,17 +41,19 @@ instance FromJSON Result where
       m :: String <- o .: "message"
       if m == "success"
         then pure Success
-        else Errors <$> o .: "errors"
+        else SendGridErrors <$> o .: "errors"
 instance ToJSON Result where
   toJSON Success =
     object
-      [ "message" .= ("success" :: Text)
-      ]
-  toJSON (Errors es) =
+      [ "message" .= ("success" :: Text) ]
+  toJSON (SendGridErrors es) =
     object
       [ "message" .= ("error" :: Text)
       , "errors" .= es
       ]
+  toJSON (OtherError _) =
+    object
+      [ "message" .= ("unknown error" :: Text) ]
 
 data NamedEmail
   = NamedEmail
@@ -61,11 +64,11 @@ data NamedEmail
 data File
  = File
   { fileName    :: Text
-  , fileContent :: ByteString
+  , fileContent :: BS.ByteString
   } deriving (Eq, Show)
 
 data Content
- = Content
+  = Content
   { contentFile :: File
   , contentId   :: Text
   } deriving (Eq, Show)
@@ -156,7 +159,7 @@ sendEmailToParts SendEmail{..} =
           That text -> [partText "text" text]
           These html text -> [partBS "html" . BSL.toStrict $ renderHtml html, partText "text" text]
 
-encodingToByteString :: Encoding -> ByteString
+encodingToByteString :: Encoding -> BS.ByteString
 encodingToByteString = BSL.toStrict . B.toLazyByteString . fromEncoding
 
 encodeHeaders :: [Header] -> Encoding

@@ -4,15 +4,14 @@
 module Network.API.SendGrid where
 
 import Control.Lens ((^?), (.~), (&))
-import Control.Monad.Error.Class (MonadError, throwError)
 import Control.Monad.Reader.Class (MonadReader, ask)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Aeson.Lens (_JSON)
-import Data.ByteString.Lazy as BSL (ByteString)
 import Data.Monoid ((<>))
 import Data.Text as T (unpack, Text)
 import Data.Text.Encoding (encodeUtf8)
-import Network.Wreq (postWith, responseBody, defaults, Options, header, Response, checkStatus)
+import Network.Wreq (responseBody, defaults, Options, header, checkStatus)
+import Network.Wreq.Session (postWith, Session)
 
 import Network.API.SendGrid.Types
 
@@ -22,11 +21,23 @@ baseSendGridUrl = "https://api.sendgrid.com/api/"
 sendEmailEndPoint :: Text
 sendEmailEndPoint = baseSendGridUrl <> "mail.send.json"
 
-sendEmail :: (MonadReader ApiKey m, MonadIO m, MonadError (Response ByteString) m) => SendEmail -> m Result
+-- | This type signature allows you to use `sendEmail` as either
+-- e.g `SendEmail -> ReaderT (ApiKey, Session) IO (IO Result)` or
+-- `SendEmail -> (ApiKey, Session) -> IO Result`
+-- In the first form, it also has the useful effect of discouraging you from sending emails
+-- in the midst of another action
+sendEmail :: (MonadReader (ApiKey, Session) n, MonadIO m) => SendEmail -> n (m Result)
 sendEmail e = do
-  key <- ask
-  rsp <- liftIO $ postWith (authOptions key) (T.unpack sendEmailEndPoint) e
-  maybe (throwError rsp) pure $ rsp ^? responseBody . _JSON
+  (key, session) <- ask
+  pure $ do
+    rsp <- liftIO $ postWith (authOptions key) session (T.unpack sendEmailEndPoint) e
+    let mResult = rsp ^? responseBody . _JSON
+    case mResult of
+      Just result -> pure result
+      Nothing -> pure $ OtherError rsp
+
+sendEmailPlain :: (MonadIO m) => ApiKey -> Session -> SendEmail -> m Result
+sendEmailPlain key session e = sendEmail e (key, session)
 
 authOptions :: ApiKey -> Options
 authOptions key =
