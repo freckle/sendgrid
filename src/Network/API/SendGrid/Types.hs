@@ -1,10 +1,11 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Network.API.SendGrid.Types where
 
-import Data.Aeson (pairs, (.=), fromEncoding, Encoding)
+import Data.Aeson (pairs, (.=), fromEncoding, Encoding, FromJSON(..), (.:), withObject, ToJSON(..), object)
 import Data.ByteString (ByteString)
 import Data.ByteString.Builder as B (toLazyByteString)
 import Data.ByteString.Lazy as BSL (toStrict)
@@ -16,15 +17,40 @@ import Data.Monoid ((<>))
 import Data.Text as T (Text, pack, unpack)
 import Data.Text.Encoding (decodeUtf8)
 import Data.These (These(..))
-import Data.Time (UTCTime(..), rfc822DateFormat, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime(..), defaultTimeLocale, formatTime)
 import Network.HTTP.Client (RequestBody(RequestBodyBS))
 import Network.HTTP.Client.MultipartFormData (partFileRequestBody)
 import Network.HTTP.Types.Header (Header)
-import Network.Wreq
+import Network.Wreq (partBS, partText, Part)
 import Network.Wreq.Types (Postable(..))
 import Text.Blaze.Html (Html)
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 import Text.Email.Validate as E (EmailAddress, toByteString)
+
+newtype ApiKey
+  = ApiKey { unApiKey :: Text } deriving (Eq, Show, Ord)
+
+data Result
+  = Success
+  | Errors [Text]
+  deriving (Eq, Show)
+instance FromJSON Result where
+  parseJSON =
+    withObject "expected SendGrid response to be an object" $ \o -> do
+      m :: String <- o .: "message"
+      if m == "success"
+        then pure Success
+        else Errors <$> o .: "errors"
+instance ToJSON Result where
+  toJSON Success =
+    object
+      [ "message" .= ("success" :: Text)
+      ]
+  toJSON (Errors es) =
+    object
+      [ "message" .= ("error" :: Text)
+      , "errors" .= es
+      ]
 
 data NamedEmail
   = NamedEmail
@@ -121,7 +147,7 @@ sendEmailToParts SendEmail{..} =
       bccParts = maybe [] (emailsToParts "bcc[]" "bccname[]") sendBcc
       fromNamePart = maybeToList $ partText "fromname" <$> sendFromName
       replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> sendReplyTo
-      datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale rfc822DateFormat <$> sendDate
+      datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> sendDate
       subjectPart = partText "subject" sendSubject
       headerPart = maybeToList $ partBS "headers" . encodingToByteString . encodeHeaders . NE.toList <$> sendHeaders
       bodyParts =
@@ -135,3 +161,6 @@ encodingToByteString = BSL.toStrict . B.toLazyByteString . fromEncoding
 
 encodeHeaders :: [Header] -> Encoding
 encodeHeaders = pairs . foldMap (\(key, value) -> decodeUtf8 (foldedCase key) .= decodeUtf8 value)
+
+sendGridDateFormat :: String
+sendGridDateFormat = "%a, %d %b %Y %H:%M:%S %z"
