@@ -11,7 +11,6 @@ import System.Environment (getEnv)
 import Network.Wreq.Session (withSession)
 
 import Network.API.SendGrid
-import Network.API.SendGrid.Types
 
 main :: IO ()
 main =
@@ -32,3 +31,4 @@ exampleEmail =
   -- Note: The previous line gets ignored because
   -- we can only use either all named emails or all unnamed emails
   & sendCc . namedEmails .~ [NamedEmail (unsafeEmailAddress "eric+1" "frontrowed.com") "Foo"]
+  & sendSmtp . categories .~ ["transactional", "test"]

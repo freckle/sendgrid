@@ -1,14 +1,17 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Network.API.SendGrid.Types where
 
-import Control.Lens (makeLenses, makePrisms, Lens', lens)
-import Data.Aeson hiding (Result, Success)
+import Control.Lens (makeLenses, makePrisms, Lens', lens, (^.), (.~), (&), at, Traversal', prism', Prism')
+import Control.Monad ((<=<))
+import qualified Data.Aeson as A
+import Data.Aeson hiding (Result(..))
 import Data.ByteString as BS (ByteString)
 #if MIN_VERSION_aeson(0,10,0)
 import Data.ByteString.Builder as B (toLazyByteString)
@@ -16,6 +19,8 @@ import Data.ByteString.Builder as B (toLazyByteString)
 import Data.ByteString.Lazy as BSL (toStrict, ByteString)
 import Data.CaseInsensitive (foldedCase)
 import qualified Data.DList as D
+import Data.Hashable (Hashable)
+import Data.HashMap.Strict as H (HashMap, fromList)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (maybeToList)
@@ -98,6 +103,7 @@ data SendEmail
   , _sendFiles    :: [File] -- ^ Don't duplicate files from `_sendContent` here
   , _sendContent  :: [Content]
   , _sendHeaders  :: [Header]
+  , _sendSmtp     :: Maybe Object
   }
 -- Can't derive (`Eq` or `Show`) because of `Html`
 makeLenses ''SendEmail
@@ -120,6 +126,34 @@ namedEmails =
       setter _ [] = Nothing
       setter _ (x : xs) = Just (Left $ x :| xs)
 
+maybeAt :: (Eq k, Hashable k) => k -> Lens' (Maybe (HashMap k (NonEmpty v))) [v]
+maybeAt k =
+  lens getter setter
+    where
+      getter Nothing = []
+      getter (Just hm) = maybe [] NE.toList $ hm ^. at k
+      setter (Just hm) [] = Just $ hm & at k .~ Nothing
+      setter (Just hm) (v : vs) = Just $ hm & at k .~ Just (v :| vs)
+      setter Nothing [] = Nothing
+      setter Nothing (v : vs) = Just (H.fromList [(k, v :| vs)])
+
+-- There is surely a better way to do this using the plethora of combinators in `lens`
+valueToNE :: Prism' (Maybe (HashMap Text Value)) (Maybe (HashMap Text (NonEmpty Text)))
+valueToNE =
+  prism' constructor destructor
+    where
+      constructor Nothing = Nothing
+      constructor (Just hm) = Just $ toJSON . NE.toList <$> hm
+      destructor (Just hm) =
+        Just <$> mapM (NE.nonEmpty <=< resultToMaybe . fromJSON) hm
+        where
+          resultToMaybe (A.Success a) = Just a
+          resultToMaybe (A.Error _) = Nothing
+      destructor Nothing = Just Nothing
+
+categories :: Traversal' (Maybe (HashMap Text Value)) [Text]
+categories = valueToNE . maybeAt "category"
+
 mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail
 mkSendEmail to subject body from
   = SendEmail
@@ -135,6 +169,7 @@ mkSendEmail to subject body from
   , _sendFiles    = []
   , _sendContent  = []
   , _sendHeaders  = []
+  , _sendSmtp     = Nothing
   }
 
 mkSingleRecipEmail :: EmailAddress -> Text -> These Html Text -> EmailAddress -> SendEmail
@@ -168,6 +203,7 @@ sendEmailToParts SendEmail{..} =
   , headerPart
   , fileParts
   , contentParts
+  , [smtpPart]
   ]
     where
       fileToPart File{..} = partFileRequestBody ("files[" <> _fileName  <> "]") (T.unpack _fileName) (RequestBodyBS _fileContent)
@@ -184,6 +220,7 @@ sendEmailToParts SendEmail{..} =
       replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> _sendReplyTo
       datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> _sendDate
       subjectPart = partText "subject" _sendSubject
+      smtpPart = partBS "x-smtpapi" . BSL.toStrict $ encode _sendSmtp
       headerPart =
         case _sendHeaders of
           [] -> []
