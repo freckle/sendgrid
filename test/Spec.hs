@@ -7,24 +7,27 @@ import Data.Text as T (pack)
 import Data.These (These(..))
 import Data.Time (UTCTime(..), fromGregorian)
 import Text.Email.Validate as E (unsafeEmailAddress)
-import System.Environment (getEnv)
+import System.Environment (lookupEnv)
 import Network.Wreq.Session (withSession)
 
 import Network.API.SendGrid
 
 main :: IO ()
-main =
-  withSession $ \session -> do
-    key <- ApiKey . T.pack <$> getEnv "API_KEY"
-    print =<< sendEmail exampleEmail (key, session)
+main = do
+  mKey <- fmap (ApiKey . T.pack) <$> lookupEnv "API_KEY"
+  case mKey of
+    Just key ->
+      withSession $ \session ->
+        print =<< sendEmail exampleEmail (key, session)
+    Nothing -> putStrLn "You need to provide a SendGrid key if you want to actually send an email"
 
 exampleEmail :: SendEmail
 exampleEmail =
-  (mkSendEmail
+  mkSendEmail
     (Left [NamedEmail (unsafeEmailAddress "eric" "frontrowed.com") "FooFoo"])
     "Coming via sendgrid"
     (That "Text body")
-    (unsafeEmailAddress "eric" "frontrowed.com"))
+    (unsafeEmailAddress "eric" "frontrowed.com")
   & sendFiles .~ [File "fileName.txt" "Attachment"]
   & sendDate .~ Just (UTCTime (fromGregorian 2000 1 1) 0)
   & sendCc . plainEmails .~ [unsafeEmailAddress "eric+2" "frontrowed.com"]
