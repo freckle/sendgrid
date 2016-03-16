@@ -203,7 +203,7 @@ sendEmailToParts SendEmail{..} =
   , headerPart
   , fileParts
   , contentParts
-  , [smtpPart]
+  , smtpPart
   ]
     where
       fileToPart File{..} = partFileRequestBody ("files[" <> _fileName  <> "]") (T.unpack _fileName) (RequestBodyBS _fileContent)
@@ -220,7 +220,7 @@ sendEmailToParts SendEmail{..} =
       replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> _sendReplyTo
       datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> _sendDate
       subjectPart = partText "subject" _sendSubject
-      smtpPart = partBS "x-smtpapi" . BSL.toStrict $ encode _sendSmtp
+      smtpPart = maybe [] (pure . partBS "x-smtpapi" . BSL.toStrict . encode) _sendSmtp
       headerPart =
         case _sendHeaders of
           [] -> []
