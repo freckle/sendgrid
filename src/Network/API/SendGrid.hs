@@ -39,8 +39,8 @@ sendEmail e = do
       Just result -> pure result
       Nothing -> pure $ OtherError rsp
 
-sendEmailPlain :: (MonadIO m) => ApiKey -> Session -> SendEmail -> m Result
-sendEmailPlain key session e = sendEmail e (key, session)
+sendEmailSimple :: (MonadIO m) => ApiKey -> Session -> SendEmail -> m Result
+sendEmailSimple key session e = sendEmail e (key, session)
 
 authOptions :: ApiKey -> Options
 authOptions key =
