@@ -24,7 +24,7 @@ main = do
 exampleEmail :: SendEmail
 exampleEmail =
   mkSendEmail
-    (Left [NamedEmail (unsafeEmailAddress "eric" "frontrowed.com") "FooFoo"])
+    (Left [NamedEmail (unsafeEmailAddress "alex" "frontrowed.com") "FooFoo"])
     "Coming via sendgrid"
     (That "Text body")
     (unsafeEmailAddress "eric" "frontrowed.com")
@@ -35,3 +35,4 @@ exampleEmail =
   -- we can only use either all named emails or all unnamed emails
   & sendCc . namedEmails .~ [NamedEmail (unsafeEmailAddress "eric+1" "frontrowed.com") "Foo"]
   & sendSmtp . categories .~ ["transactional", "test"]
+  & sendSmtp . template .~ Just "a96302be-bf72-409c-859b-cf4d317d0e2a"

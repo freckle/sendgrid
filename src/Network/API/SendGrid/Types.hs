@@ -1,5 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -8,10 +10,9 @@
 
 module Network.API.SendGrid.Types where
 
-import Control.Lens (makeLenses, makePrisms, Lens', lens, (^.), (.~), (&), at, Traversal', prism', Prism')
-import Control.Monad ((<=<))
-import qualified Data.Aeson as A
+import Control.Lens (makeLenses, makePrisms, Lens', lens, (^?), (^.), (.~), (&), at, Traversal', _Just)
 import Data.Aeson hiding (Result(..))
+import Data.Aeson.Lens (key, _String, _JSON, _Object)
 import Data.ByteString as BS (ByteString)
 #if MIN_VERSION_aeson(0,10,0)
 import Data.ByteString.Builder as B (toLazyByteString)
@@ -19,11 +20,10 @@ import Data.ByteString.Builder as B (toLazyByteString)
 import Data.ByteString.Lazy as BSL (toStrict, ByteString)
 import Data.CaseInsensitive (foldedCase)
 import qualified Data.DList as D
-import Data.Hashable (Hashable)
-import Data.HashMap.Strict as H (HashMap, fromList)
+import Data.HashMap.Strict as H (HashMap)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
-import Data.Maybe (maybeToList)
+import Data.Maybe (maybeToList, fromMaybe)
 import Data.Monoid ((<>))
 import Data.Text as T (Text, pack, unpack)
 import Data.Text.Encoding (decodeUtf8)
@@ -126,33 +126,60 @@ namedEmails =
       setter _ [] = Nothing
       setter _ (x : xs) = Just (Left $ x :| xs)
 
-maybeAt :: (Eq k, Hashable k) => k -> Lens' (Maybe (HashMap k (NonEmpty v))) [v]
-maybeAt k =
+-- Should try to extract a generic autovivifying optic (for monoidal structures)
+
+-- Currently, in the "works for me" category
+-- We should make sure this actually follows laws
+categories :: Traversal' (Maybe (HashMap Text Value)) [Text]
+categories =
   lens getter setter
     where
-      getter Nothing = []
-      getter (Just hm) = maybe [] NE.toList $ hm ^. at k
-      setter (Just hm) [] = Just $ hm & at k .~ Nothing
-      setter (Just hm) (v : vs) = Just $ hm & at k .~ Just (v :| vs)
+      getter mhm = fromMaybe [] $ mhm ^? _Just . at "category" . _Just . _JSON
       setter Nothing [] = Nothing
-      setter Nothing (v : vs) = Just (H.fromList [(k, v :| vs)])
-
--- There is surely a better way to do this using the plethora of combinators in `lens`
-valueToNE :: Prism' (Maybe (HashMap Text Value)) (Maybe (HashMap Text (NonEmpty Text)))
-valueToNE =
-  prism' constructor destructor
-    where
-      constructor Nothing = Nothing
-      constructor (Just hm) = Just $ toJSON . NE.toList <$> hm
-      destructor (Just hm) =
-        Just <$> mapM (NE.nonEmpty <=< resultToMaybe . fromJSON) hm
+      setter Nothing xs = Just $ mempty & at "category" .~ Just (toJSON xs)
+      setter (Just hm) [] =
+        if hm' == mempty
+        then Nothing
+        else Just hm'
         where
-          resultToMaybe (A.Success a) = Just a
-          resultToMaybe (A.Error _) = Nothing
-      destructor Nothing = Just Nothing
+          hm' = hm & at "category" .~ Nothing
+      setter (Just hm) xs = Just $ hm & at "category" .~ Just (toJSON xs)
 
-categories :: Traversal' (Maybe (HashMap Text Value)) [Text]
-categories = valueToNE . maybeAt "category"
+-- Currently, in the "works for me" category
+-- We should make sure this actually follows laws
+template :: Lens' (Maybe (HashMap Text Value)) (Maybe Text)
+template =
+  lens getter setter
+    where
+      getter Nothing = Nothing
+      getter (Just hm) = hm ^? at "filters" . _Just . key "templates" . key "settings" . key "template_id" . _String
+      setter (Just hm) (Just templateId) =
+        Just $ hm' & at "filters" . _Just . _Object . at "templates" .~ Just (settingsObj templateId)
+        where
+          hm' =
+            case hm ^. at "filters" of
+              Nothing -> hm & at "filters" .~ Just (object mempty)
+              Just _ -> hm
+      setter (Just hm) Nothing =
+        if templatesRemoved == emptyFilters
+        then
+          if filtersRemoved == mempty
+          then Nothing
+          else Just filtersRemoved
+        else
+          Just templatesRemoved
+        where
+          emptyFilters = hm & at "filters" .~ Just (object mempty)
+          templatesRemoved = hm & at "filters" . _Just . _Object . at "templates" .~ Nothing
+          filtersRemoved = hm & at "filters" .~ Nothing
+
+      setter Nothing (Just templateId) = Just $ mempty & at "filters" .~ Just (templatesObj templateId)
+      setter Nothing Nothing = Nothing
+      settingsObj templateId =
+        object [ "settings" .= object [ "enable" .= (1 :: Int), "template_id" .= templateId ] ]
+      templatesObj templateId =
+        object [ "templates" .= settingsObj templateId ]
+
 
 mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail
 mkSendEmail to subject body from
@@ -245,7 +272,7 @@ headersToBS = encodingToByteString . encodeHeaders
 #else
 
 headersToBS :: [Header] -> BS.ByteString
-headersToBS = BSL.toStrict . encode . object . map (\(key, value) -> decodeUtf8 (foldedCase key) .= decodeUtf8 value)
+headersToBS = BSL.toStrict . encode . object . map (\(key', value) -> decodeUtf8 (foldedCase key') .= decodeUtf8 value)
 
 #endif
 
