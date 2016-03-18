@@ -16,7 +16,8 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Network.API.SendGrid
-                     , Network.API.SendGrid.Types
+                     , Network.API.SendGrid.Core
+                     , Network.API.SendGrid.SendEmail
   build-depends:       base >= 4.7 && < 5
                      , email-validate
                      , bytestring
