@@ -20,7 +20,8 @@ import Data.ByteString.Builder as B (toLazyByteString)
 import Data.ByteString.Lazy as BSL (toStrict, ByteString)
 import Data.CaseInsensitive (foldedCase)
 import qualified Data.DList as D
-import Data.HashMap.Strict as H (HashMap)
+import Data.HashMap.Strict as H (HashMap, unionWith, empty)
+import Data.List (foldl')
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (maybeToList, fromMaybe)
@@ -91,22 +92,33 @@ makeLenses ''Content
 
 data SendEmail
  = SendEmail
-  { _sendTo       :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
-  , _sendSubject  :: Text
-  , _sendBody     :: These Html Text
-  , _sendFrom     :: EmailAddress
-  , _sendCc       :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , _sendBcc      :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , _sendFromName :: Maybe Text
-  , _sendReplyTo  :: Maybe EmailAddress
-  , _sendDate     :: Maybe UTCTime
-  , _sendFiles    :: [File] -- ^ Don't duplicate files from `_sendContent` here
-  , _sendContent  :: [Content]
-  , _sendHeaders  :: [Header]
-  , _sendSmtp     :: Maybe Object
+  { _sendTo         :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
+  , _sendSubject    :: Text
+  , _sendBody       :: These Html Text
+  , _sendFrom       :: EmailAddress
+  , _sendCc         :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _sendBcc        :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _sendFromName   :: Maybe Text
+  , _sendReplyTo    :: Maybe EmailAddress
+  , _sendDate       :: Maybe UTCTime
+  , _sendFiles      :: [File] -- ^ Don't duplicate files from `_sendContent` here
+  , _sendContent    :: [Content]
+  , _sendHeaders    :: [Header]
+  , _sendCategories :: [Text] -- ^ A well-typed way to specify this subpart of the SendGrid's SMTP param
+  , _sendTemplateId :: Maybe Text -- ^ A well-typed way to specify this subpart of the SendGrid's SMTP param
+  , _sendSmtp       :: Maybe Value
+    -- ^ Escape hatch for other uses of SendGrid's SMTP param.
+    -- If the keys you define here don't overlap with `categories` or `templateId`, everything will be merged sensibly.
+    -- If they do overlap, the preceding well-typed fields take precedence.
   }
 -- Can't derive (`Eq` or `Show`) because of `Html`
 makeLenses ''SendEmail
+
+-- mergeObjects {key1: {subKey1: 1}} {key1: {subKey2: 2}} == {key1: {subKey1: 1, subKey2: 2}}
+-- mergeObjects {key1: {subKey1: 1}} {key1: {subKey1: 2}} == {key1: {subKey1: 1}}
+mergeObjects :: Value -> Value -> Value
+mergeObjects (Object hm1) (Object hm2) = Object $ unionWith mergeObjects hm1 hm2
+mergeObjects x _ = x
 
 plainEmails :: Lens' (Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))) [EmailAddress]
 plainEmails =
@@ -126,77 +138,24 @@ namedEmails =
       setter _ [] = Nothing
       setter _ (x : xs) = Just (Left $ x :| xs)
 
--- Should try to extract a generic autovivifying optic (for monoidal structures)
-
--- Currently, in the "works for me" category
--- We should make sure this actually follows laws
-categories :: Traversal' (Maybe (HashMap Text Value)) [Text]
-categories =
-  lens getter setter
-    where
-      getter mhm = fromMaybe [] $ mhm ^? _Just . at "category" . _Just . _JSON
-      setter Nothing [] = Nothing
-      setter Nothing xs = Just $ mempty & at "category" .~ Just (toJSON xs)
-      setter (Just hm) [] =
-        if hm' == mempty
-        then Nothing
-        else Just hm'
-        where
-          hm' = hm & at "category" .~ Nothing
-      setter (Just hm) xs = Just $ hm & at "category" .~ Just (toJSON xs)
-
--- Currently, in the "works for me" category
--- We should make sure this actually follows laws
-template :: Lens' (Maybe (HashMap Text Value)) (Maybe Text)
-template =
-  lens getter setter
-    where
-      getter Nothing = Nothing
-      getter (Just hm) = hm ^? at "filters" . _Just . key "templates" . key "settings" . key "template_id" . _String
-      setter (Just hm) (Just templateId) =
-        Just $ hm' & at "filters" . _Just . _Object . at "templates" .~ Just (settingsObj templateId)
-        where
-          hm' =
-            case hm ^. at "filters" of
-              Nothing -> hm & at "filters" .~ Just (object mempty)
-              Just _ -> hm
-      setter (Just hm) Nothing =
-        if templatesRemoved == emptyFilters
-        then
-          if filtersRemoved == mempty
-          then Nothing
-          else Just filtersRemoved
-        else
-          Just templatesRemoved
-        where
-          emptyFilters = hm & at "filters" .~ Just (object mempty)
-          templatesRemoved = hm & at "filters" . _Just . _Object . at "templates" .~ Nothing
-          filtersRemoved = hm & at "filters" .~ Nothing
-
-      setter Nothing (Just templateId) = Just $ mempty & at "filters" .~ Just (templatesObj templateId)
-      setter Nothing Nothing = Nothing
-      settingsObj templateId =
-        object [ "settings" .= object [ "enable" .= (1 :: Int), "template_id" .= templateId ] ]
-      templatesObj templateId =
-        object [ "templates" .= settingsObj templateId ]
-
-
 mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail
 mkSendEmail to subject body from
   = SendEmail
-  { _sendTo       = to
-  , _sendSubject  = subject
-  , _sendBody     = body
-  , _sendFrom     = from
-  , _sendCc       = Nothing
-  , _sendBcc      = Nothing
-  , _sendFromName = Nothing
-  , _sendReplyTo  = Nothing
-  , _sendDate     = Nothing
-  , _sendFiles    = []
-  , _sendContent  = []
-  , _sendHeaders  = []
-  , _sendSmtp     = Nothing
+  { _sendTo         = to
+  , _sendSubject    = subject
+  , _sendBody       = body
+  , _sendFrom       = from
+  , _sendCc         = Nothing
+  , _sendBcc        = Nothing
+  , _sendFromName   = Nothing
+  , _sendReplyTo    = Nothing
+  , _sendDate       = Nothing
+  , _sendFiles      = []
+  , _sendContent    = []
+  , _sendHeaders    = []
+  , _sendCategories = []
+  , _sendTemplateId = Nothing
+  , _sendSmtp       = Nothing
   }
 
 mkSingleRecipEmail :: EmailAddress -> Text -> These Html Text -> EmailAddress -> SendEmail
@@ -247,7 +206,9 @@ sendEmailToParts SendEmail{..} =
       replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> _sendReplyTo
       datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> _sendDate
       subjectPart = partText "subject" _sendSubject
-      smtpPart = maybe [] (pure . partBS "x-smtpapi" . BSL.toStrict . encode) _sendSmtp
+      smtpPart =
+        maybe [] (pure . partBS "x-smtpapi" . BSL.toStrict . encode) $
+        smtpValue _sendTemplateId _sendCategories _sendSmtp
       headerPart =
         case _sendHeaders of
           [] -> []
@@ -257,6 +218,44 @@ sendEmailToParts SendEmail{..} =
           This html -> [partBS "html" . BSL.toStrict $ renderHtml html]
           That text -> [partText "text" text]
           These html text -> [partBS "html" . BSL.toStrict $ renderHtml html, partText "text" text]
+
+smtpValue :: Maybe Text -> [Text] -> Maybe Value -> Maybe Value
+smtpValue templateId categories custom =
+  if merged == mempty
+  then Nothing
+  else Just merged
+  where
+    merged =
+      foldl'
+        mergeObjects
+        mempty
+        [ maybe mempty templateIdToSmtpHeader templateId
+        , maybe mempty categoriesToSmtpHeader $ NE.nonEmpty categories
+        , fromMaybe mempty custom
+        ]
+    mempty = Object H.empty
+
+categoriesToSmtpHeader :: NonEmpty Text -> Value
+categoriesToSmtpHeader cs =
+  object
+    [ "category" .= toJSON (NE.toList cs)
+    ]
+
+templateIdToSmtpHeader :: Text -> Value
+templateIdToSmtpHeader tId =
+  object
+    [ "filters" .=
+      object
+        [ "templates" .=
+          object
+            [ "settings" .=
+              object
+                [ "template_id" .= tId
+                , "enable" .= (1 :: Int)
+                ]
+            ]
+        ]
+    ]
 
 #if MIN_VERSION_aeson(0,10,0)
 
