@@ -1,5 +1,7 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -20,9 +22,11 @@ import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (maybeToList, fromMaybe)
 import Data.Monoid ((<>))
+import Data.Tagged (Tagged, unTagged)
 import Data.Text as T (Text, pack, unpack)
 import Data.These (These(..))
 import Data.Time (UTCTime(..), defaultTimeLocale, formatTime)
+import GHC.Generics (Generic)
 import Network.HTTP.Client (RequestBody(RequestBodyBS))
 import Network.HTTP.Client.MultipartFormData (partFileRequestBody)
 import Network.HTTP.Types.Header (Header)
@@ -46,36 +50,44 @@ data File
  = File
   { _fileName    :: Text
   , _fileContent :: BS.ByteString
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show, Generic)
 makeLenses ''File
 
 -- | Type for SendGrid's content field.
 -- Consists of a file and name by which you can refer to that file.
 data Content
   = Content
-  { _file :: File
+  { _file        :: File
   , _contentId   :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show, Generic)
 makeLenses ''Content
 
+data UnsubscribeGroup
+data TemplateId
+
 -- | The configuration type for your email sending request.
-data SendEmail
+data SendEmail cat
  = SendEmail
-  { _recipients :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
-  , _replyTo    :: Maybe EmailAddress
-  , _cc         :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , _bcc        :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , _sender     :: EmailAddress
-  , _senderName :: Maybe Text
-  , _subject    :: Text
-  , _body       :: These Html Text
-  , _date       :: Maybe UTCTime
-  , _files      :: [File] -- ^ Don't duplicate files from @_content@ here. @_content@ already handles the file attaching.
-  , _content    :: [Content]
-  , _headers    :: [Header]
-  , _categories :: [Text] -- ^ A typeful way to specify this subpart of the SendGrid's SMTP param
-  , _templateId :: Maybe Text -- ^ A typeful way to specify this subpart of the SendGrid's SMTP param
-  , _smtp       :: Maybe Value
+  { _recipients           :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
+  , _replyTo              :: Maybe EmailAddress
+  , _cc                   :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _bcc                  :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _sender               :: EmailAddress
+  , _senderName           :: Maybe Text
+  , _subject              :: Text
+  , _body                 :: These Html Text
+  , _date                 :: Maybe UTCTime
+  , _files                :: [File] -- ^ Don't duplicate files from @_content@ here. @_content@ already handles the file attaching.
+  , _content              :: [Content]
+  , _headers              :: [Header]
+  , _categories           :: [cat]
+    -- ^ Specify the categories with which to label the email.
+    -- Should be a type that supports @ToJSON@.
+    -- e.g. @Text@ or your own enum like @data Category = Transactional | Marketing@
+  , _templateId           :: Maybe (Tagged TemplateId Text) -- ^ A typeful way to specify this subpart of the SendGrid's SMTP param
+  , _inlineUnsubscribe    :: Maybe (Tagged UnsubscribeGroup Int)
+  , _prefPageUnsubscribes :: [Tagged UnsubscribeGroup Int]
+  , _smtp                 :: Maybe Value
     -- ^ Escape hatch for other uses of SendGrid's SMTP param.
     -- If the keys you define here don't overlap with @categories@ or @templateId@, everything will be merged sensibly.
     -- If they do overlap, the @_categories@ and @_templateId@ take precedence.
@@ -111,36 +123,38 @@ namedEmails =
 
 -- | Helper constructor to make the minimal @SendEmail@,
 -- one with everything possible set to @Nothing@ or @[]@.
-mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail
+mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail cat
 mkSendEmail to subject' body' from
   = SendEmail
-  { _recipients = to
-  , _replyTo    = Nothing
-  , _cc         = Nothing
-  , _bcc        = Nothing
-  , _sender     = from
-  , _senderName = Nothing
-  , _subject    = subject'
-  , _body       = body'
-  , _date       = Nothing
-  , _files      = []
-  , _content    = []
-  , _headers    = []
-  , _categories = []
-  , _templateId = Nothing
-  , _smtp       = Nothing
+  { _recipients           = to
+  , _replyTo              = Nothing
+  , _cc                   = Nothing
+  , _bcc                  = Nothing
+  , _sender               = from
+  , _senderName           = Nothing
+  , _subject              = subject'
+  , _body                 = body'
+  , _date                 = Nothing
+  , _files                = []
+  , _content              = []
+  , _headers              = []
+  , _categories           = []
+  , _templateId           = Nothing
+  , _inlineUnsubscribe    = Nothing
+  , _prefPageUnsubscribes = []
+  , _smtp                 = Nothing
   }
 
 -- | Convenience constructor to make an email intended for a single recipient.
-mkSingleRecipEmail :: EmailAddress -> Text -> These Html Text -> EmailAddress -> SendEmail
+mkSingleRecipEmail :: EmailAddress -> Text -> These Html Text -> EmailAddress -> SendEmail cat
 mkSingleRecipEmail to = mkSendEmail (Right $ pure to)
 
 -- * Serializing @SendEmail@ for SendGrid
 
-instance Postable SendEmail where
+instance (ToJSON cat) => Postable (SendEmail cat) where
   postPayload = postPayload . sendEmailToParts
 
-sendEmailToParts :: SendEmail -> [Part]
+sendEmailToParts :: (ToJSON cat) => SendEmail cat -> [Part]
 sendEmailToParts SendEmail{..} =
   D.toList $ foldMap D.fromList
   [ toParts
@@ -174,7 +188,7 @@ sendEmailToParts SendEmail{..} =
       subjectPart = partText "subject" _subject
       smtpPart =
         maybe [] (pure . partBS "x-smtpapi" . BSL.toStrict . encode) $
-        smtpValue _templateId _categories _smtp
+        smtpValue _templateId _categories _inlineUnsubscribe _prefPageUnsubscribes _smtp
       headerPart =
         case _headers of
           [] -> []
@@ -195,8 +209,15 @@ emailsToParts emailKey nameKey (Left namedEmails') =
 emailsToParts emailKey _ (Right emails) =
   partBS emailKey . E.toByteString <$> NE.toList emails
 
-smtpValue :: Maybe Text -> [Text] -> Maybe Value -> Maybe Value
-smtpValue templateId' categories' custom =
+smtpValue
+  :: (ToJSON cat)
+  => Maybe (Tagged TemplateId Text)
+  -> [cat]
+  -> Maybe (Tagged UnsubscribeGroup Int)
+  -> [Tagged UnsubscribeGroup Int]
+  -> Maybe Value
+  -> Maybe Value
+smtpValue templateId' categories' inlineUnsubscribe' prefPageUnsubscribes' custom =
   if merged == mempty'
   then Nothing
   else Just merged
@@ -205,39 +226,45 @@ smtpValue templateId' categories' custom =
       foldl'
         mergeObjects
         mempty'
-        [ maybe mempty' templateIdToSmtpHeader templateId'
+        [ maybe mempty' (templateIdToSmtpHeader . unTagged) templateId'
         , maybe mempty' categoriesToSmtpHeader $ NE.nonEmpty categories'
+        , maybe mempty' (inlineUnsubscribeToSmtpHeader . unTagged) inlineUnsubscribe'
+        , maybe mempty' prefPageUnsubscribesToSmtpHeader $ NE.nonEmpty prefPageUnsubscribes'
         , fromMaybe mempty' custom
         ]
     mempty' = Object H.empty
-
-categoriesToSmtpHeader :: NonEmpty Text -> Value
-categoriesToSmtpHeader cs =
-  object
-    [ "category" .= toJSON (NE.toList cs)
-    ]
-
-templateIdToSmtpHeader :: Text -> Value
-templateIdToSmtpHeader tId =
-  object
-    [ "filters" .=
+    inlineUnsubscribeToSmtpHeader iu =
       object
-        [ "templates" .=
+        [ "asm_group_id" .= iu
+        ]
+    prefPageUnsubscribesToSmtpHeader us =
+      object
+        [ "asm_groups_to_display" .= toJSON (unTagged <$> NE.toList us)
+        ]
+    categoriesToSmtpHeader cs =
+      object
+        [ "category" .= toJSON (NE.toList cs)
+        ]
+    templateIdToSmtpHeader tId =
+      object
+        [ "filters" .=
           object
-            [ "settings" .=
+            [ "templates" .=
               object
-                [ "template_id" .= tId
-                , "enable" .= (1 :: Int)
+                [ "settings" .=
+                  object
+                    [ "template_id" .= tId
+                    , "enable" .= (1 :: Int)
+                    ]
                 ]
             ]
         ]
-    ]
 
 
 -- * Sending email
 
 -- | Simple function for sending email via SendGrid.
-sendEmailSimple :: (MonadIO m) => ApiKey -> Session -> SendEmail -> m Result
+sendEmailSimple :: (ToJSON cat, MonadIO m) => Tagged ApiKey Text -> Session -> SendEmail cat -> m Result
 sendEmailSimple key session e = sendEmail e (key, session)
 
 -- | This type signature allows you to use @sendEmail@ as either
@@ -250,7 +277,7 @@ sendEmailSimple key session e = sendEmail e (key, session)
 --
 -- In the first form, it also has the useful effect of discouraging you from sending emails
 -- in the midst of another action.
-sendEmail :: (MonadReader (ApiKey, Session) n, MonadIO m) => SendEmail -> n (m Result)
+sendEmail :: (ToJSON cat) => (MonadReader (Tagged ApiKey Text, Session) n, MonadIO m) => SendEmail cat -> n (m Result)
 sendEmail e = do
   (key, session) <- ask
   pure $ do

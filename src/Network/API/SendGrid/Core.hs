@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -6,7 +7,7 @@
 -- | Contains functionality which is likely to be shared across multiple SendGrid endpoints
 module Network.API.SendGrid.Core where
 
-import Control.Lens (makeLenses, makePrisms, (^.), (.~), (&))
+import Control.Lens (makeLenses, makePrisms, (.~), (&))
 import Data.Aeson hiding (Result(..))
 import Data.ByteString as BS (ByteString)
 #if MIN_VERSION_aeson(0,10,0)
@@ -16,8 +17,10 @@ import Data.ByteString.Lazy as BSL (toStrict, ByteString)
 import Data.CaseInsensitive (foldedCase)
 import Data.HashMap.Strict (unionWith)
 import Data.Monoid ((<>))
+import Data.Tagged (Tagged(..))
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import GHC.Generics (Generic)
 import Network.HTTP.Client (Response)
 import Network.HTTP.Types.Header (Header)
 import Network.Wreq (Options, defaults, header, checkStatus)
@@ -28,19 +31,14 @@ baseSendGridUrl = "https://api.sendgrid.com/api/"
 
 -- * Requests
 
--- | Wrapper for SendGrid API key.
--- Should look like @SG.aaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@
-newtype ApiKey
-  = ApiKey Text
-  deriving (Eq, Show, Ord)
-makePrisms ''ApiKey
+data ApiKey
 
 -- | Add our bearer token in the header to authenticate.
 -- Also, don't treat non-200 statuses as exceptional.
-authOptions :: ApiKey -> Options
-authOptions key =
+authOptions :: Tagged ApiKey Text -> Options
+authOptions (Tagged key) =
   defaults
-    & header "Authorization" .~ ["Bearer " <> encodeUtf8 (key ^. _ApiKey)]
+    & header "Authorization" .~ ["Bearer " <> encodeUtf8 key]
     -- We'd rather deal with status code problems as values
     & checkStatus .~ Just (\_ _ _ -> Nothing)
 
@@ -53,7 +51,7 @@ data Result
   | OtherError (Response BSL.ByteString)
   -- ^ If the response couldn't be parsed as either a success or an application layer issue,
   -- return the whole response.
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 makePrisms ''Result
 instance FromJSON Result where
   parseJSON =
@@ -94,7 +92,7 @@ data NamedEmail
   = NamedEmail
   { _email :: EmailAddress
   , _name  :: Text
-  } deriving (Eq, Show)
+  } deriving (Eq, Read, Show, Generic)
 makeLenses ''NamedEmail
 
 -- ** Encoding headers as JSON format ByteString
