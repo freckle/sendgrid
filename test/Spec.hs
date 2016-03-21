@@ -9,7 +9,8 @@ import Data.These (These(..))
 import Data.Time (UTCTime(..), fromGregorian)
 import Text.Email.Validate as E (unsafeEmailAddress)
 import System.Environment (lookupEnv)
-import Network.Wreq.Session (withSession, post)
+import Network.Wreq (checkStatus, defaults)
+import Network.Wreq.Session (withSession, postWith)
 
 import Network.API.SendGrid
 
@@ -19,7 +20,9 @@ main = do
   withSession $ \session ->
     case mKey of
       Just key -> print =<< sendEmail exampleEmail (key, session)
-      Nothing -> print =<< post session "http://requestb.in/10ebisf1" exampleEmail
+      Nothing ->
+        print =<<
+        postWith (defaults & checkStatus .~ Just (\_ _ _ -> Nothing)) session "http://requestb.in/10ebisf1" exampleEmail
 
 exampleEmail :: SendEmail Text
 exampleEmail =
