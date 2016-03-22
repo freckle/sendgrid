@@ -8,7 +8,7 @@
 -- | Contains the types and functions necessary for sending an email via SendGrid.
 module Network.API.SendGrid.SendEmail where
 
-import Control.Lens (makeLenses, Lens', lens, (^?))
+import Control.Lens (makeLenses, Lens', lens, (^?), (^.))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Reader.Class (MonadReader, ask)
@@ -31,7 +31,7 @@ import GHC.Generics (Generic)
 import Network.HTTP.Client (RequestBody(RequestBodyBS))
 import Network.HTTP.Client.MultipartFormData (partFileRequestBody)
 import Network.HTTP.Types.Header (Header)
-import Network.Wreq (responseBody, partBS, partText, Part)
+import Network.Wreq (responseBody, partBS, partText, Part, responseStatus)
 import Network.Wreq.Session (postWith, Session)
 import Network.Wreq.Types (Postable(..))
 import Text.Blaze.Html (Html)
@@ -269,10 +269,10 @@ sendEmailSimple :: (ToJSON cat, MonadIO m) => Tagged ApiKey Text -> Session -> S
 sendEmailSimple key session e = runReaderT (sendEmail e) (key, session)
 
 sendEmail :: (ToJSON cat) => (MonadReader (Tagged ApiKey Text, Session) m, MonadIO m) => SendEmail cat -> m Result
-sendEmail e = do
+sendEmail msg = do
   (key, session) <- ask
-  rsp <- liftIO $ postWith (authOptions key) session (T.unpack sendEmailEndPoint) e
-  let mResult = rsp ^? responseBody . _JSON
-  case mResult of
-    Just result -> pure result
-    Nothing -> pure $ OtherError rsp
+  liftIO $ handleResponse <$> postWith (authOptions key) session (T.unpack sendEmailEndPoint) msg
+  where
+    handleResponse rsp = maybe (ParseError rsp) (elaborate rsp) $ rsp ^? responseBody . _JSON
+    elaborate _ JSuccess = Success
+    elaborate rsp (JSendGridErrors es) = SendGridErrors (rsp ^. responseStatus) es

@@ -22,6 +22,7 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import GHC.Generics (Generic)
 import Network.HTTP.Client (Response)
+import Network.HTTP.Types (Status)
 import Network.HTTP.Types.Header (Header)
 import Network.Wreq (Options, defaults, header, checkStatus)
 import Text.Email.Validate (EmailAddress)
@@ -44,35 +45,39 @@ authOptions (Tagged key) =
 
 -- * Responses
 
+-- | The information that's directly represented in SendGrid JSON.
+-- Primarily for internal use.
+data JResult
+  = JSuccess
+  | JSendGridErrors [Text]
+  deriving (Eq, Show, Generic)
+makePrisms ''JResult
+
 -- | Result type for all SendGrid responses.
 data Result
   = Success
-  | SendGridErrors [Text] -- ^ These are the error messages SendGrid returns in JSON for application layer problems
-  | OtherError (Response BSL.ByteString)
-  -- ^ If the response couldn't be parsed as either a success or an application layer issue,
-  -- return the whole response.
+  | SendGridErrors Status [Text] -- ^ These are the error messages SendGrid returns in JSON for application layer problems
+  | ParseError (Response BSL.ByteString)
+  -- ^ If the response couldn't be parsed as either a success or an application layer issue, return the whole response.
   deriving (Eq, Show, Generic)
 makePrisms ''Result
-instance FromJSON Result where
+instance FromJSON JResult where
   parseJSON =
     withObject "expected SendGrid response to be an object" $ \o -> do
       m :: String <- o .: "message"
       if m == "success"
-        then pure Success
-        else SendGridErrors <$> o .: "errors"
+        then pure JSuccess
+        else JSendGridErrors <$> o .: "errors"
 -- We really only provide this instance so we can use @_JSON@
-instance ToJSON Result where
-  toJSON Success =
+instance ToJSON JResult where
+  toJSON JSuccess =
     object
       [ "message" .= ("success" :: Text) ]
-  toJSON (SendGridErrors es) =
+  toJSON (JSendGridErrors es) =
     object
       [ "message" .= ("error" :: Text)
       , "errors" .= es
       ]
-  toJSON (OtherError _) =
-    object
-      [ "message" .= ("unknown error" :: Text) ]
 
 -- * Miscellaneous helpers
 
