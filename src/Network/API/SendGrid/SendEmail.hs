@@ -10,6 +10,7 @@ module Network.API.SendGrid.SendEmail where
 
 import Control.Lens (makeLenses, Lens', lens, (^?))
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Reader (runReaderT)
 import Control.Monad.Reader.Class (MonadReader, ask)
 import Data.Aeson hiding (Result(..))
 import Data.Aeson.Lens (_JSON)
@@ -265,24 +266,13 @@ smtpValue templateId' categories' inlineUnsubscribe' prefPageUnsubscribes' custo
 
 -- | Simple function for sending email via SendGrid.
 sendEmailSimple :: (ToJSON cat, MonadIO m) => Tagged ApiKey Text -> Session -> SendEmail cat -> m Result
-sendEmailSimple key session e = sendEmail e (key, session)
+sendEmailSimple key session e = runReaderT (sendEmail e) (key, session)
 
--- | This type signature allows you to use @sendEmail@ as either
---
--- @SendEmail -> ReaderT (ApiKey, Session) IO (IO Result)@
---
--- or
---
--- @SendEmail -> (ApiKey, Session) -> IO Result@
---
--- In the first form, it also has the useful effect of discouraging you from sending emails
--- in the midst of another action.
-sendEmail :: (ToJSON cat) => (MonadReader (Tagged ApiKey Text, Session) n, MonadIO m) => SendEmail cat -> n (m Result)
+sendEmail :: (ToJSON cat) => (MonadReader (Tagged ApiKey Text, Session) m, MonadIO m) => SendEmail cat -> m Result
 sendEmail e = do
   (key, session) <- ask
-  pure $ do
-    rsp <- liftIO $ postWith (authOptions key) session (T.unpack sendEmailEndPoint) e
-    let mResult = rsp ^? responseBody . _JSON
-    case mResult of
-      Just result -> pure result
-      Nothing -> pure $ OtherError rsp
+  rsp <- liftIO $ postWith (authOptions key) session (T.unpack sendEmailEndPoint) e
+  let mResult = rsp ^? responseBody . _JSON
+  case mResult of
+    Just result -> pure result
+    Nothing -> pure $ OtherError rsp

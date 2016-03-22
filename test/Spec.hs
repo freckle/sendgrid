@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 import Control.Lens ((.~), (&))
+import Control.Monad.Reader (runReaderT)
 import Data.Tagged (Tagged(..))
 import Data.Text as T (pack, Text)
 import Data.These (These(..))
@@ -19,7 +20,7 @@ main = do
   mKey <- fmap (Tagged . T.pack) <$> lookupEnv "API_KEY"
   withSession $ \session ->
     case mKey of
-      Just key -> print =<< sendEmail exampleEmail (key, session)
+      Just key -> print =<< runReaderT (sendEmail exampleEmail) (key, session)
       Nothing ->
         print =<<
         postWith (defaults & checkStatus .~ Just (\_ _ _ -> Nothing)) session "http://requestb.in/10ebisf1" exampleEmail
