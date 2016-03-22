@@ -63,7 +63,7 @@ data Content
   } deriving (Eq, Read, Show, Generic)
 makeLenses ''Content
 
-data UnsubscribeGroup
+data UnsubscribeGroupId
 data TemplateId
 
 -- | The configuration type for your email sending request.
@@ -86,8 +86,8 @@ data SendEmail cat
     -- Should be a type that supports @ToJSON@.
     -- e.g. @Text@ or your own enum like @data Category = Transactional | Marketing@
   , _templateId           :: Maybe (Tagged TemplateId Text) -- ^ A typeful way to specify this subpart of the SendGrid's SMTP param
-  , _inlineUnsubscribe    :: Maybe (Tagged UnsubscribeGroup Int)
-  , _prefPageUnsubscribes :: [Tagged UnsubscribeGroup Int]
+  , _inlineUnsubscribe    :: Maybe (Tagged UnsubscribeGroupId Int)
+  , _prefPageUnsubscribes :: [Tagged UnsubscribeGroupId Int]
   , _smtp                 :: Maybe Value
     -- ^ Escape hatch for other uses of SendGrid's SMTP param.
     -- If the keys you define here don't overlap with @categories@ or @templateId@, everything will be merged sensibly.
@@ -214,8 +214,8 @@ smtpValue
   :: (ToJSON cat)
   => Maybe (Tagged TemplateId Text)
   -> [cat]
-  -> Maybe (Tagged UnsubscribeGroup Int)
-  -> [Tagged UnsubscribeGroup Int]
+  -> Maybe (Tagged UnsubscribeGroupId Int)
+  -> [Tagged UnsubscribeGroupId Int]
   -> Maybe Value
   -> Maybe Value
 smtpValue templateId' categories' inlineUnsubscribe' prefPageUnsubscribes' custom =
