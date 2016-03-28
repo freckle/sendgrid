@@ -8,15 +8,16 @@
 -- | Contains the types and functions necessary for sending an email via SendGrid.
 module Network.API.SendGrid.SendEmail where
 
-import Control.Lens (makeLenses, Lens', lens, (^?), (^.))
+import Control.Lens (makeLenses, Lens', lens, (^?), (^.), Lens)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Reader.Class (MonadReader, ask)
-import Data.Aeson hiding (Result(..))
+import Data.Aeson (Value(Object), object, ToJSON (toJSON), encode, (.=))
 import Data.Aeson.Lens (_JSON)
 import Data.ByteString as BS (ByteString)
 import Data.ByteString.Lazy as BSL (toStrict)
 import qualified Data.DList as D
+import qualified Data.Foldable as F (toList)
 import Data.HashMap.Strict as H (empty)
 import Data.List (foldl')
 import Data.List.NonEmpty (NonEmpty(..))
@@ -67,12 +68,15 @@ data UnsubscribeGroupId
 data TemplateId
 
 -- | The configuration type for your email sending request.
-data SendEmail cat
- = SendEmail
-  { _recipients           :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress)
+data SendEmail cat recipCont ccCont bccCont
+  = SendEmail
+  { _recipients           :: recipCont EmailAddress
+  , _recipientNames       :: Maybe (recipCont Text)
   , _replyTo              :: Maybe EmailAddress
-  , _cc                   :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
-  , _bcc                  :: Maybe (Either (NonEmpty NamedEmail) (NonEmpty EmailAddress))
+  , _ccs                  :: ccCont EmailAddress
+  , _ccNames              :: Maybe (ccCont Text)
+  , _bccs                 :: bccCont EmailAddress
+  , _bccNames             :: Maybe (bccCont Text)
   , _sender               :: EmailAddress
   , _senderName           :: Maybe Text
   , _subject              :: Text
@@ -95,6 +99,63 @@ data SendEmail cat
   }
 -- Can't derive @Eq@ or @Show@ because of @Html@
 makeLenses ''SendEmail
+
+-- | This lens is most useful when using a sized collection.
+-- e.g. If you want to change, from `SendEmail Text (Vector 1) (Vector 0) (Vector 0)`
+-- to `SendEmail Text (Vector 1) (Vector 1) (Vector 0)`,
+-- a sequential use of `ccs` and `ccNames` won't suffice
+-- because of the mismatching types after adding an element to `ccs` and before adding one to `ccNames`.
+ccsAll
+  :: Lens
+       (SendEmail cat recipCont ccCont1 bccCont)
+       (SendEmail cat recipCont ccCont2 bccCont)
+       (ccCont1 EmailAddress, Maybe (ccCont1 Text))
+       (ccCont2 EmailAddress, Maybe (ccCont2 Text))
+ccsAll pure' s = (\(emails, names) -> s { _ccs = emails, _ccNames = names }) <$> pure' (_ccs s, _ccNames s)
+
+-- | This lens isn't law-abiding. `ccNames` is always `Nothing` after updating via this lens.
+-- This is a convenience to allow changing the length of `ccs` by itself when using a sized collection.
+ccsWipe
+  :: Lens
+       (SendEmail cat recipCont ccCont1 bccCont)
+       (SendEmail cat recipCont ccCont2 bccCont)
+       (ccCont1 EmailAddress)
+       (ccCont2 EmailAddress)
+ccsWipe pure' s = (\cc -> s { _ccs = cc, _ccNames = Nothing }) <$> pure' (_ccs s)
+
+bccsAll
+  :: Lens
+       (SendEmail cat recipCont ccCont bccCont1)
+       (SendEmail cat recipCont ccCont bccCont2)
+       (bccCont1 EmailAddress, Maybe (bccCont1 Text))
+       (bccCont2 EmailAddress, Maybe (bccCont2 Text))
+bccsAll pure' s = (\(emails, names) -> s { _bccs = emails, _bccNames = names }) <$> pure' (_bccs s, _bccNames s)
+
+bccsWipe
+  :: Lens
+       (SendEmail cat recipCont ccCont bccCont1)
+       (SendEmail cat recipCont ccCont bccCont2)
+       (bccCont1 EmailAddress)
+       (bccCont2 EmailAddress)
+bccsWipe pure' s = (\bcc -> s { _bccs = bcc, _bccNames = Nothing }) <$> pure' (_bccs s)
+
+recipientsAll
+  :: Lens
+       (SendEmail cat recipCont1 ccCont bccCont)
+       (SendEmail cat recipCont2 ccCont bccCont)
+       (recipCont1 EmailAddress, Maybe (recipCont1 Text))
+       (recipCont2 EmailAddress, Maybe (recipCont2 Text))
+recipientsAll pure' s =
+  (\(emails, names) -> s { _recipients = emails, _recipientNames = names }) <$>
+  pure' (_recipients s, _recipientNames s)
+
+recipientsWipe
+  :: Lens
+       (SendEmail cat recipCont1 ccCont bccCont)
+       (SendEmail cat recipCont2 ccCont bccCont)
+       (recipCont1 EmailAddress)
+       (recipCont2 EmailAddress)
+recipientsWipe pure' s = (\r -> s { _recipients = r, _recipientNames = Nothing }) <$> pure' (_recipients s)
 
 -- | Makes using @cc@ and @bcc@ friendlier. e.g.
 --
@@ -124,14 +185,22 @@ namedEmails =
 
 -- | Helper constructor to make the minimal @SendEmail@,
 -- one with everything possible set to @Nothing@ or @[]@.
-mkSendEmail :: Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> Text -> These Html Text -> EmailAddress -> SendEmail cat
-mkSendEmail to subject' body' from
+mkSendEmail
+  :: ( Monoid (ccCont EmailAddress)
+     , Monoid (bccCont EmailAddress)
+     )
+  => recipCont EmailAddress -> Text -> These Html Text -> EmailAddress
+  -> SendEmail cat recipCont ccCont bccCont
+mkSendEmail recipients' subject' body' sender'
   = SendEmail
-  { _recipients           = to
+  { _recipients           = recipients'
+  , _recipientNames       = Nothing
   , _replyTo              = Nothing
-  , _cc                   = Nothing
-  , _bcc                  = Nothing
-  , _sender               = from
+  , _ccs                  = mempty
+  , _ccNames              = Nothing
+  , _bccs                 = mempty
+  , _bccNames             = Nothing
+  , _sender               = sender'
   , _senderName           = Nothing
   , _subject              = subject'
   , _body                 = body'
@@ -147,18 +216,29 @@ mkSendEmail to subject' body' from
   }
 
 -- | Convenience constructor to make an email intended for a single recipient.
-mkSingleRecipEmail :: EmailAddress -> Text -> These Html Text -> EmailAddress -> SendEmail cat
-mkSingleRecipEmail to = mkSendEmail (Right $ pure to)
+mkSingleRecipEmail
+  :: ( Applicative recipCont
+     , Monoid (ccCont EmailAddress)
+     , Monoid (bccCont EmailAddress)
+     )
+  => EmailAddress -> Text -> These Html Text -> EmailAddress
+  -> SendEmail cat recipCont ccCont bccCont
+mkSingleRecipEmail to = mkSendEmail (pure to)
 
 -- * Serializing @SendEmail@ for SendGrid
 
-instance (ToJSON cat) => Postable (SendEmail cat) where
+instance
+  (ToJSON cat, Foldable recipCont, Foldable ccCont, Foldable bccCont)
+  => Postable (SendEmail cat recipCont ccCont bccCont) where
   postPayload = postPayload . sendEmailToParts
 
-sendEmailToParts :: (ToJSON cat) => SendEmail cat -> [Part]
+-- TODO: FINISH THE ADJUSTMENTS HERE!
+sendEmailToParts
+  :: (ToJSON cat, Foldable recipCont, Foldable ccCont, Foldable bccCont)
+  => SendEmail cat recipCont ccCont bccCont -> [Part]
 sendEmailToParts SendEmail{..} =
   D.toList $ foldMap D.fromList
-  [ toParts
+  [ recipientsParts
   , [subjectPart]
   , bodyParts
   , [fromPart]
@@ -179,10 +259,10 @@ sendEmailToParts SendEmail{..} =
           contentToParts (Content file'@File{..} cId) =
             [fileToPart file', partText ("content[" <> _fileName <> "]") cId]
       fileParts = fileToPart <$> _files
-      toParts = emailsToParts "to[]" "toname[]" _recipients
+      recipientsParts = partBS "to[]" . E.toByteString <$> F.toList _recipients
       fromPart = partBS "from" $ E.toByteString _sender
-      ccParts = maybe [] (emailsToParts "cc[]" "ccname[]") _cc
-      bccParts = maybe [] (emailsToParts "bcc[]" "bccname[]") _bcc
+      ccParts = partBS "cc[]" . E.toByteString <$> F.toList _ccs
+      bccParts = partBS "bcc[]" . E.toByteString <$> F.toList _bccs
       fromNamePart = maybeToList $ partText "fromname" <$> _senderName
       replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> _replyTo
       datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> _date
@@ -265,10 +345,18 @@ smtpValue templateId' categories' inlineUnsubscribe' prefPageUnsubscribes' custo
 -- * Sending email
 
 -- | Simple function for sending email via SendGrid.
-sendEmailSimple :: (ToJSON cat, MonadIO m) => Tagged ApiKey Text -> Session -> SendEmail cat -> m Result
+sendEmailSimple
+  :: (ToJSON cat, MonadIO m
+     , Foldable recipCont, Foldable ccCont, Foldable bccCont
+     )
+  => Tagged ApiKey Text -> Session -> SendEmail cat recipCont ccCont bccCont -> m Result
 sendEmailSimple key session e = runReaderT (sendEmail e) (key, session)
 
-sendEmail :: (ToJSON cat) => (MonadReader (Tagged ApiKey Text, Session) m, MonadIO m) => SendEmail cat -> m Result
+sendEmail
+  :: ( ToJSON cat, MonadReader (Tagged ApiKey Text, Session) m, MonadIO m
+     , Foldable recipCont, Foldable ccCont, Foldable bccCont
+     )
+  => SendEmail cat recipCont ccCont bccCont -> m Result
 sendEmail msg = do
   (key, session) <- ask
   liftIO $ handleResponse <$> postWith (authOptions key) session (T.unpack sendEmailEndPoint) msg
