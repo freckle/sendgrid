@@ -6,13 +6,15 @@
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
+import Control.Arrow ((***))
 import Control.Lens ((.~), (&), (%~))
 import Control.Monad.Reader (runReaderT)
+import Data.Aeson (object, (.=))
 import Data.Tagged (Tagged(..))
 import Data.Text as T (pack, Text)
 import Data.These (These(..))
 import Data.Time (UTCTime(..), fromGregorian)
-import Data.Vector.Sized as V (Vector, empty, (++), cons)
+import Data.Vector.Sized as V (Vector, empty, cons)
 import GHC.TypeLits (type (+))
 import Text.Email.Validate as E (unsafeEmailAddress)
 import System.Environment (lookupEnv)
@@ -35,11 +37,7 @@ infixr 5 #:
 (#:) :: a -> Vector n a -> Vector (n + 1) a
 a #: b = a `cons` b
 
-instance Monoid (Vector 0 a) where
-  mempty = empty
-  mappend = (V.++)
-
-exampleEmail':: SendEmail Text (Vector 1) (Vector 2) (Vector 0)
+exampleEmail':: SendEmail Text (Vector 1) (Vector 2) (Vector 2)
 exampleEmail' =
   exampleEmail
   & files .~ [File "fileName.txt" "Attachment"]
@@ -50,6 +48,12 @@ exampleEmail' =
   & ccsWipe .~ (unsafeEmailAddress "eric+2" "frontrowed.com" #: empty)
   & ccsWipe %~ (unsafeEmailAddress "eric+3" "frontrowed.com" #:)
   & ccNames .~ (Just $ "foo" #: "bar" #: empty)
+  & bccsWipe .~ (unsafeEmailAddress "eric+4" "frontrowed.com" #: empty)
+  & bccNames .~ (Just $ "baz" #: empty)
+  & bccsAll %~ ((unsafeEmailAddress "eric+5" "frontrowed.com" #:) *** fmap ("qux" #:))
+  & senderName .~ Just "oul"
+  & recipientNames .~ (Just $ "me" #: empty)
+  & smtp .~ Just (object ["hello" .= ("ignored" :: Text)])
 
 exampleEmail :: SendEmail Text (Vector 1) (Vector 0) (Vector 0)
 exampleEmail =

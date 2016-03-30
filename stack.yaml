@@ -7,9 +7,11 @@ resolver: lts-5.8
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
+- location:
+    git: git@github.com:pseudonom/vector-sized
+    commit: ae914b6819ab850d989078c07d463f379132d1e5
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
-extra-deps:
-  - vector-sized-0.3.0.0
+extra-deps: []
 
 # Override default flag values for local packages and extra-deps
 flags: {}

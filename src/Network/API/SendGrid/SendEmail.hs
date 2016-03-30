@@ -94,8 +94,9 @@ data SendEmail cat recipCont ccCont bccCont
   , _prefPageUnsubscribes :: [Tagged UnsubscribeGroupId Int]
   , _smtp                 :: Maybe Value
     -- ^ Escape hatch for other uses of SendGrid's SMTP param.
-    -- If the keys you define here don't overlap with @categories@ or @templateId@, everything will be merged sensibly.
-    -- If they do overlap, the @_categories@ and @_templateId@ take precedence.
+    -- If the keys you define here don't overlap with those defined explicitly in the rest of the record,
+    -- everything will be merged sensibly.
+    -- If they do overlap, the explicit versions in the record take precedence.
   }
 -- Can't derive @Eq@ or @Show@ because of @Html@
 makeLenses ''SendEmail
@@ -232,19 +233,44 @@ instance
   => Postable (SendEmail cat recipCont ccCont bccCont) where
   postPayload = postPayload . sendEmailToParts
 
--- TODO: FINISH THE ADJUSTMENTS HERE!
+-- Not using wildcards here to ensure we actually handle everything
 sendEmailToParts
   :: (ToJSON cat, Foldable recipCont, Foldable ccCont, Foldable bccCont)
   => SendEmail cat recipCont ccCont bccCont -> [Part]
-sendEmailToParts SendEmail{..} =
+sendEmailToParts
+  (SendEmail
+     recipients'
+     recipientNames'
+     replyTo'
+     ccs'
+     ccNames'
+     bccs'
+     bccNames'
+     sender'
+     senderName'
+     subject'
+     body'
+     date'
+     files'
+     content'
+     headers'
+     categories'
+     templateId'
+     inlineUnsubscribe'
+     prefPageUnsubscribes'
+     smtp'
+     ) =
   D.toList $ foldMap D.fromList
   [ recipientsParts
+  , recipientNameParts
   , [subjectPart]
   , bodyParts
   , [fromPart]
   , ccParts
+  , ccNameParts
   , bccParts
-  , fromNamePart
+  , bccNameParts
+  , senderNamePart
   , replyToPart
   , datePart
   , headerPart
@@ -254,41 +280,34 @@ sendEmailToParts SendEmail{..} =
   ]
     where
       fileToPart File{..} = partFileRequestBody ("files[" <> _fileName  <> "]") (T.unpack _fileName) (RequestBodyBS _fileContent)
-      contentParts = foldMap contentToParts _content
+      contentParts = foldMap contentToParts content'
         where
           contentToParts (Content file'@File{..} cId) =
             [fileToPart file', partText ("content[" <> _fileName <> "]") cId]
-      fileParts = fileToPart <$> _files
-      recipientsParts = partBS "to[]" . E.toByteString <$> F.toList _recipients
-      fromPart = partBS "from" $ E.toByteString _sender
-      ccParts = partBS "cc[]" . E.toByteString <$> F.toList _ccs
-      bccParts = partBS "bcc[]" . E.toByteString <$> F.toList _bccs
-      fromNamePart = maybeToList $ partText "fromname" <$> _senderName
-      replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> _replyTo
-      datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> _date
-      subjectPart = partText "subject" _subject
+      fileParts = fileToPart <$> files'
+      recipientsParts = partBS "to[]" . E.toByteString <$> F.toList recipients'
+      recipientNameParts = partText "toname[]" <$> maybe [] F.toList recipientNames'
+      fromPart = partBS "from" $ E.toByteString sender'
+      ccParts = partBS "cc[]" . E.toByteString <$> F.toList ccs'
+      ccNameParts = partText "ccname[]" <$> maybe [] F.toList ccNames'
+      bccParts = partBS "bcc[]" . E.toByteString <$> F.toList bccs'
+      bccNameParts = partText "bccname[]" <$> maybe [] F.toList bccNames'
+      senderNamePart = maybeToList $ partText "fromname" <$> senderName'
+      replyToPart = maybeToList $ partBS "replyto" . E.toByteString <$> replyTo'
+      datePart = maybeToList $ partText "date" . T.pack . formatTime defaultTimeLocale sendGridDateFormat <$> date'
+      subjectPart = partText "subject" subject'
       smtpPart =
         maybe [] (pure . partBS "x-smtpapi" . BSL.toStrict . encode) $
-        smtpValue _templateId _categories _inlineUnsubscribe _prefPageUnsubscribes _smtp
+        smtpValue templateId' categories' inlineUnsubscribe' prefPageUnsubscribes' smtp'
       headerPart =
-        case _headers of
+        case headers' of
           [] -> []
-          headers' -> [partBS "headers" . headersToBS $ headers']
+          headers'' -> [partBS "headers" . headersToBS $ headers'']
       bodyParts =
-        case _body of
+        case body' of
           This html -> [partBS "html" . BSL.toStrict $ renderHtml html]
           That text -> [partText "text" text]
           These html text -> [partBS "html" . BSL.toStrict $ renderHtml html, partText "text" text]
-
-emailsToParts :: Text -> Text -> Either (NonEmpty NamedEmail) (NonEmpty EmailAddress) -> [Part]
-emailsToParts emailKey nameKey (Left namedEmails') =
-  flip foldMap namedEmails'
-     (\NamedEmail{..} ->
-       [ partBS emailKey $ E.toByteString _email
-       , partText nameKey _name
-       ])
-emailsToParts emailKey _ (Right emails) =
-  partBS emailKey . E.toByteString <$> NE.toList emails
 
 smtpValue
   :: (ToJSON cat)
