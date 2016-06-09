@@ -1,9 +1,11 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | Contains the types and functions necessary for sending an email via SendGrid.
 module Network.API.SendGrid.SendEmail where
@@ -372,14 +374,24 @@ sendEmailSimple
 sendEmailSimple key session e = runReaderT (sendEmail e) (key, session)
 
 sendEmail
-  :: ( ToJSON cat, MonadReader (Tagged ApiKey Text, Session) m, MonadIO m
+  :: ( ToJSON cat, HasEnv m, MonadIO m
      , Foldable recipCont, Foldable ccCont, Foldable bccCont
      )
   => SendEmail cat recipCont ccCont bccCont -> m Result
 sendEmail msg = do
-  (key, session) <- ask
+  (key, session) <- getEnv
   liftIO $ handleResponse <$> postWith (authOptions key) session (T.unpack sendEmailEndPoint) msg
   where
     handleResponse rsp = maybe (ParseError rsp) (elaborate rsp) $ rsp ^? responseBody . _JSON
     elaborate _ JSuccess = Success
     elaborate rsp (JSendGridErrors es) = SendGridErrors (rsp ^. responseStatus) es
+
+-- | A minor generalization which allows us to avoid @withReader@
+class HasEnv m where
+  getEnv :: m (Tagged ApiKey Text, Session)
+instance (MonadReader env m, Env env) => HasEnv m where
+  getEnv = env <$> ask
+class Env env where
+  env :: env -> (Tagged ApiKey Text, Session)
+instance Env (Tagged ApiKey Text, Session) where
+  env = id
