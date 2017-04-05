@@ -24,7 +24,7 @@ import GHC.Generics (Generic)
 import Network.HTTP.Client (Response)
 import Network.HTTP.Types (Status)
 import Network.HTTP.Types.Header (Header)
-import Network.Wreq (Options, defaults, header, checkStatus)
+import Network.Wreq (Options, defaults, header, checkResponse)
 import Text.Email.Validate (EmailAddress)
 
 baseSendGridUrl :: Text
@@ -41,7 +41,7 @@ authOptions (Tagged key) =
   defaults
     & header "Authorization" .~ ["Bearer " <> encodeUtf8 key]
     -- We'd rather deal with status code problems as values
-    & checkStatus .~ Just (\_ _ _ -> Nothing)
+    & checkResponse .~ Just (\_ _ -> pure ())
 
 -- * Responses
 
