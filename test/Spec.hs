@@ -18,7 +18,7 @@ import Data.Vector.Sized as V (Vector, empty, cons)
 import GHC.TypeLits (type (+))
 import Text.Email.Validate as E (unsafeEmailAddress)
 import System.Environment (lookupEnv)
-import Network.Wreq (checkStatus, defaults)
+import Network.Wreq (checkResponse, defaults)
 import Network.Wreq.Session (withSession, postWith)
 
 import Network.API.SendGrid
@@ -27,11 +27,11 @@ main :: IO ()
 main = do
   mKey <- fmap (Tagged . T.pack) <$> lookupEnv "API_KEY"
   withSession $ \session ->
-    case mKey of
+    case mKey :: Maybe (Tagged ApiKey Text) of
       Just key -> print =<< runReaderT (sendEmail exampleEmail') (key, session)
       Nothing ->
         print =<<
-        postWith (defaults & checkStatus .~ Just (\_ _ _ -> Nothing)) session "http://requestb.in/10ebisf1" exampleEmail
+        postWith (defaults & checkResponse .~ Just (\_ _ -> pure ())) session "http://requestb.in/10ebisf1" exampleEmail
 
 infixr 5 #:
 (#:) :: a -> Vector n a -> Vector (n + 1) a
