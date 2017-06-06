@@ -62,3 +62,60 @@ exampleEmail =
     "Coming via sendgrid"
     (That "Text body")
     (unsafeEmailAddress "alex" "frontrowed.com")
+
+
+
+
+
+
+
+
+email1 :: SendEmail Text (Vector 1) (Vector 0) (Vector 0)
+email1 =
+  let [sender, recipient] = map (uncurry unsafeEmailAddress) [
+        ("sender", "source.com"),
+        ("receiver", "person.com")
+        ]
+  in
+    mkSingleRecipEmail
+      recipient
+      "Coming via sendgrid"
+      (That "Text body")
+      sender
+
+email2 :: SendEmail Text (Vector 1) (Vector 0) (Vector 0)
+email2 = email1
+  & categories .~ ["email", "test", "foo", "bar"]
+  & templateId .~ Just "ff469da0-4a45-4263-2414-5ac770565e4d"
+
+email3 =
+  let cc1 = unsafeEmailAddress "cc1" "example.com"
+      cc2 = unsafeEmailAddress "cc2" "example.com"
+      n1  = "CC 1"
+      n2  = "CC 2"
+  in email2
+     & ccsAll .~ (cc2 #: cc1 #: empty, Just $ n2 #: n1 #: empty)
+
+email4 =
+  let cc1 = unsafeEmailAddress "cc1" "example.com"
+      cc2 = unsafeEmailAddress "cc2" "example.com"
+      n1  = "CC 1"
+      n2  = "CC 2"
+  in email2
+     & ccsWipe .~ (cc2 #: cc1 #: empty)
+     & ccNames .~ (Just $ n2 #: n1 #: empty)
+
+
+main' = do
+  key <- fmap (Tagged . T.pack) <$> lookupEnv "API_KEY"
+  maybe
+    (fail "Could not lookup API_KEY in environment")
+    sendMyEmail
+    key
+
+sendMyEmail :: Tagged ApiKey Text -> IO ()
+sendMyEmail apikey = do
+  result <- withSession $ \session ->
+    runReaderT (sendEmail email4) (apikey, session)
+  print result
+
