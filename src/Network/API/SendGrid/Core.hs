@@ -7,13 +7,13 @@
 -- | Contains functionality which is likely to be shared across multiple SendGrid endpoints
 module Network.API.SendGrid.Core where
 
-import Control.Lens (makeLenses, makePrisms, (.~), (&))
-import Data.Aeson hiding (Result(..))
+import Control.Lens (makeLenses, makePrisms, (&), (.~))
+import Data.Aeson hiding (Options, Result(..))
 import Data.ByteString as BS (ByteString)
 #if MIN_VERSION_aeson(0,10,0)
 import Data.ByteString.Builder as B (toLazyByteString)
 #endif
-import Data.ByteString.Lazy as BSL (toStrict, ByteString)
+import Data.ByteString.Lazy as BSL (ByteString, toStrict)
 import Data.CaseInsensitive (foldedCase)
 import Data.HashMap.Strict (unionWith)
 import Data.Monoid ((<>))
@@ -24,7 +24,7 @@ import GHC.Generics (Generic)
 import Network.HTTP.Client (Response)
 import Network.HTTP.Types (Status)
 import Network.HTTP.Types.Header (Header)
-import Network.Wreq (Options, defaults, header, checkResponse)
+import Network.Wreq (Options, checkResponse, defaults, header)
 import Text.Email.Validate (EmailAddress)
 
 baseSendGridUrl :: Text
