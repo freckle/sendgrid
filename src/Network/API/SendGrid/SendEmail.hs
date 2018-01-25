@@ -10,11 +10,11 @@
 -- | Contains the types and functions necessary for sending an email via SendGrid.
 module Network.API.SendGrid.SendEmail where
 
-import Control.Lens (makeLenses, Lens', lens, (^?), (^.), Lens)
+import Control.Lens (Lens, Lens', lens, makeLenses, (^.), (^?))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Reader.Class (MonadReader, ask)
-import Data.Aeson (Value(Object), object, ToJSON (toJSON), encode, (.=))
+import Data.Aeson (ToJSON(toJSON), Value(Object), encode, object, (.=))
 import Data.Aeson.Lens (_JSON)
 import Data.ByteString as BS (ByteString)
 import Data.ByteString.Lazy as BSL (toStrict)
@@ -24,7 +24,7 @@ import Data.HashMap.Strict as H (empty)
 import Data.List (foldl')
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
-import Data.Maybe (maybeToList, fromMaybe)
+import Data.Maybe (fromMaybe, maybeToList)
 import Data.Monoid ((<>))
 import Data.Tagged (Tagged, unTagged)
 import Data.Text as T (Text, pack, unpack)
@@ -34,8 +34,8 @@ import GHC.Generics (Generic)
 import Network.HTTP.Client (RequestBody(RequestBodyBS))
 import Network.HTTP.Client.MultipartFormData (partFileRequestBody)
 import Network.HTTP.Types.Header (Header)
-import Network.Wreq (responseBody, partBS, partText, Part, responseStatus)
-import Network.Wreq.Session (postWith, Session)
+import Network.Wreq (Part, partBS, partText, responseBody, responseStatus)
+import Network.Wreq.Session (Session, postWith)
 import Network.Wreq.Types (Postable(..))
 import Text.Blaze.Html (Html)
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
@@ -374,7 +374,7 @@ sendEmailSimple
 sendEmailSimple key session e = runReaderT (sendEmail e) (key, session)
 
 sendEmail
-  :: ( ToJSON cat, HasEnv m, MonadIO m
+  :: ( ToJSON cat, MonadReader env m, Env env, MonadIO m
      , Foldable recipCont, Foldable ccCont, Foldable bccCont
      )
   => SendEmail cat recipCont ccCont bccCont -> m Result
