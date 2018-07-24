@@ -8,6 +8,7 @@
 
 import Control.Arrow ((***))
 import Control.Lens ((.~), (&), (%~))
+import Data.Functor.Const (Const)
 import Control.Monad.Reader (runReaderT)
 import Data.Aeson (object, (.=))
 import Data.Tagged (Tagged(..))
@@ -34,7 +35,7 @@ main = do
         postWith (defaults & checkResponse .~ Just (\_ _ -> pure ())) session "http://requestb.in/10ebisf1" exampleEmail
 
 infixr 5 #:
-(#:) :: a -> Vector n a -> Vector (n + 1) a
+(#:) :: a -> Vector n a -> Vector (1 + n) a
 a #: b = a `cons` b
 
 exampleEmail':: SendEmail Text (Vector 1) (Vector 2) (Vector 2)
@@ -55,7 +56,7 @@ exampleEmail' =
   & recipientNames .~ (Just $ "me" #: empty)
   & smtp .~ Just (object ["hello" .= ("ignored" :: Text)])
 
-exampleEmail :: SendEmail Text (Vector 1) (Vector 0) (Vector 0)
+exampleEmail :: SendEmail Text (Vector 1) (Const ()) (Const ())
 exampleEmail =
   mkSingleRecipEmail
     (unsafeEmailAddress "eric" "frontrowed.com")
@@ -70,7 +71,7 @@ exampleEmail =
 
 
 
-email1 :: SendEmail Text (Vector 1) (Vector 0) (Vector 0)
+email1 :: SendEmail Text (Vector 1) (Const ()) (Const ())
 email1 =
   let [sender, recipient] = map (uncurry unsafeEmailAddress) [
         ("sender", "source.com"),
@@ -83,7 +84,7 @@ email1 =
       (That "Text body")
       sender
 
-email2 :: SendEmail Text (Vector 1) (Vector 0) (Vector 0)
+email2 :: SendEmail Text (Vector 1) (Const ()) (Const ())
 email2 = email1
   & categories .~ ["email", "test", "foo", "bar"]
   & templateId .~ Just "ff469da0-4a45-4263-2414-5ac770565e4d"
