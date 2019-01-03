@@ -1,3 +1,7 @@
+**ARCHIVED**: We no longer use this project, so we are not actively maintaining
+it. Please see [here](http://hackage.haskell.org/packages/search?terms=sendgrid) for
+possible alternatives.
+
 # SendGrid
 
 Haskell interface to the [SendGrid API].
